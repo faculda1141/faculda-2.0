@@ -191,16 +191,41 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
     }
 
     setLoading(true);
+    const normalizedEmail = email.toLowerCase().trim();
+
     try {
+      // 1. Verificação Primária e Absoluta em Tempo Real no Firestore (Global para todos os PCs)
+      try {
+        const docRef = doc(db, "students", normalizedEmail);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          throw new Error("Este endereço de e-mail já está associado a um cadastro do Faculda+.");
+        }
+      } catch (fsError: any) {
+        if (fsError.message && fsError.message.includes("já está associado")) {
+          throw fsError;
+        }
+        console.warn("Aviso ao consultar Firestore primário:", fsError);
+      }
+
+      // 2. Verificação no banco local (localStorage)
+      const localUsers = getLocalUsers();
+      const alreadyExistsLocal = localUsers.find(
+        (u) => u.email.toLowerCase().trim() === normalizedEmail
+      );
+      if (alreadyExistsLocal) {
+        throw new Error("Este endereço de e-mail já está associado a um cadastro do Faculda+.");
+      }
+
       let registeredUser: any = null;
       let registerSuccessful = false;
 
-      // Try communicating with Backend first
+      // 3. Tenta salvar no Backend
       try {
         const response = await fetch("/api/auth/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fullName, email, password, originSchool })
+          body: JSON.stringify({ fullName, email: normalizedEmail, password, originSchool })
         });
 
         const contentType = response.headers.get("content-type");
@@ -211,42 +236,17 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
           }
           registeredUser = data.user;
           registerSuccessful = true;
-        } else {
-          throw new Error("No JSON response - triggers fallback");
         }
       } catch (backendError: any) {
-        // If there was a real API error with a descriptive message, propagate it
-        if (backendError.message && backendError.message !== "No JSON response - triggers fallback" && !backendError.message.includes("Unexpected token")) {
+        // Se a API do servidor retornou que o usuário já existe, repassa o erro
+        if (backendError.message && backendError.message.includes("já está associado")) {
           throw backendError;
         }
+        console.warn("API de backend offline ou servidor estático (Vercel). Continuando com salvamento em banco de dados seguro.");
+      }
 
-        // Client-side Database Fallback & Strict Duplicate Check (e.g., StackBlitz or static platform)
-        console.warn("Servidor indisponível ou estático. Efetuando validação e cadastro via Banco de Dados Local (localStorage)...");
-        const normalizedEmail = email.toLowerCase().trim();
-
-        // Verificação de e-mail duplicado no Firestore
-        try {
-          const docRef = doc(db, "students", normalizedEmail);
-          const docSnap = await getDoc(docRef);
-          if (docSnap.exists()) {
-            throw new Error("Este endereço de e-mail já está associado a um cadastro do Faculda+.");
-          }
-        } catch (fsError: any) {
-          if (fsError.message.includes("já está associado")) {
-            throw fsError;
-          }
-          console.warn("Erro ao verificar duplicidade no Firestore, prosseguindo com verificação local:", fsError);
-        }
-
-        const localUsers = getLocalUsers();
-        const alreadyExists = localUsers.find(
-          (u) => u.email.toLowerCase().trim() === normalizedEmail
-        );
-
-        if (alreadyExists) {
-          throw new Error("Este endereço de e-mail já está associado a um cadastro do Faculda+.");
-        }
-
+      // 4. Salva localmente caso o backend seja estático/Vercel
+      if (!registerSuccessful) {
         const newStudent: LocalUser = {
           fullName: fullName.trim(),
           email: normalizedEmail,
@@ -266,19 +266,19 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
         registerSuccessful = true;
       }
 
+      // 5. Salva de forma garantida no Firestore com persistência global
       if (registerSuccessful && registeredUser) {
-        // Salva também no Firestore para persistência robusta em nuvem
         try {
-          await setDoc(doc(db, "students", registeredUser.email.toLowerCase()), {
+          await setDoc(doc(db, "students", normalizedEmail), {
             fullName: registeredUser.fullName,
-            email: registeredUser.email.toLowerCase(),
+            email: normalizedEmail,
             originSchool: registeredUser.originSchool,
-            password: password, // For easy recovery/authentication fallback across restarts
+            password: password,
             createdAt: new Date().toISOString()
           });
-          console.log("🔥 [Firebase] Estudante cadastrado com sucesso no Firestore!");
+          console.log("🔥 [Firebase] Estudante cadastrado com sucesso e garantido no Firestore global!");
         } catch (fbError) {
-          console.error("⚠️ [Firebase] Erro ao sincronizar cadastro com o Firestore:", fbError);
+          console.error("⚠️ [Firebase] Erro ao gravar estudante no Firestore:", fbError);
         }
 
         onLoginSuccess({

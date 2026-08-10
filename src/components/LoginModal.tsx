@@ -94,50 +94,38 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
           loggedUser = data.user;
           loginSuccessful = true;
         } else {
-          throw new Error("No JSON response - triggers fallback");
+          throw new Error("Backend offline");
         }
       } catch (backendError: any) {
-        // Se for um erro real do backend mas informando que o usuário não existe ou erro genérico, vamos tentar Firestore primeiro!
-        console.log("🔍 [Login] Tentando recuperar cadastro alternativo do Firebase Firestore...");
+        // Se for erro da API informando credenciais incorretas ou usuário não encontrado
+        if (backendError.message && !backendError.message.includes("Backend offline") && !backendError.message.includes("Unexpected token") && !backendError.message.includes("No JSON response")) {
+          throw backendError;
+        }
+
+        console.log("🔍 [Login] Consultando cadastro no Firebase Firestore em tempo real...");
+        const normalizedEmail = email.toLowerCase().trim();
         try {
-          const docRef = doc(db, "students", email.toLowerCase().trim());
+          const docRef = doc(db, "students", normalizedEmail);
           const docSnap = await getDoc(docRef);
 
           if (docSnap.exists()) {
             const data = docSnap.data();
-            // Valida a senha se ela estiver registrada no Firestore, senão aceita
             if (!data.password || data.password === password) {
               loggedUser = {
-                email: data.email || email.toLowerCase().trim(),
+                email: data.email || normalizedEmail,
                 fullName: data.fullName || "Estudante",
                 originSchool: data.originSchool || "Escola Pública Estadual",
               };
               loginSuccessful = true;
               console.log("🔥 [Firebase] Usuário recuperado e autenticado via Firestore.");
-              
-              // Tenta sincronizar de volta para o servidor local em segundo plano para persistência local
-              try {
-                await fetch("/api/auth/register", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    fullName: loggedUser.fullName,
-                    email: loggedUser.email,
-                    password: password,
-                    originSchool: loggedUser.originSchool
-                  })
-                });
-              } catch (syncErr) {
-                console.warn("Sincronização de usuário secundária ignorada:", syncErr);
-              }
             } else {
               throw new Error("Senha incorreta. Verifique suas credenciais de segurança.");
             }
           } else {
-            // Se não encontrou no Firestore, tenta a base local do localStorage antes de lançar o erro original
+            // Se não encontrou no Firestore, verifica no banco local (localStorage)
             const localUsers = getLocalUsers();
             const matched = localUsers.find(
-              (u) => u.email.toLowerCase().trim() === email.toLowerCase().trim()
+              (u) => u.email.toLowerCase().trim() === normalizedEmail
             );
 
             if (matched) {
@@ -151,12 +139,11 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
               };
               loginSuccessful = true;
             } else {
-              // Lança a mensagem amigável original
-              throw new Error(backendError.message || "Usuário com este e-mail não encontrado em nossa base integrada.");
+              throw new Error("Usuário com este e-mail não encontrado em nossa base de dados.");
             }
           }
         } catch (fsError: any) {
-          throw new Error(fsError.message || backendError.message || "Usuário com este e-mail não encontrado em nossa base integrada.");
+          throw new Error(fsError.message || "Usuário com este e-mail não encontrado em nossa base de dados.");
         }
       }
 
@@ -323,10 +310,10 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
           }
           setSuccessMessage(data.message || `Instruções enviadas para ${email}.`);
         } else {
-          throw new Error("No JSON response - triggers fallback");
+          throw new Error("Backend offline");
         }
       } catch (backendError: any) {
-        if (backendError.message && backendError.message !== "No JSON response - triggers fallback" && !backendError.message.includes("Unexpected token")) {
+        if (backendError.message && !backendError.message.includes("Backend offline") && !backendError.message.includes("Unexpected token") && !backendError.message.includes("No JSON response")) {
           throw backendError;
         }
 

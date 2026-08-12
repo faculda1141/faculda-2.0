@@ -1,5 +1,14 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, getDocs, query, orderBy } from "firebase/firestore";
+import {
+  getAuth,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signOut,
+  updateProfile,
+  onAuthStateChanged
+} from "firebase/auth";
 import firebaseConfigFile from "../../firebase-applet-config.json";
 
 // Suporte flexível para Variáveis de Ambiente (Vite/GitHub/Vercel) ou arquivo de configuração local
@@ -17,6 +26,9 @@ const config = {
 // Inicializa o aplicativo Firebase
 const app = initializeApp(config);
 
+// Inicializa o Firebase Authentication
+export const auth = getAuth(app);
+
 // Inicializa o banco de dados Firestore (seja padrão ou com databaseId específico)
 export const db = config.firestoreDatabaseId && config.firestoreDatabaseId !== "(default)"
   ? getFirestore(app, config.firestoreDatabaseId)
@@ -30,7 +42,13 @@ export {
   getDoc,
   getDocs,
   query,
-  orderBy
+  orderBy,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signOut,
+  updateProfile,
+  onAuthStateChanged
 };
 
-console.log("🔥 [Firebase] Inicializado com sucesso para o projeto:", config.projectId);
+console.log("🔥 [Firebase] Inicializado com sucesso para o projeto (Firestore + Auth):", config.projectId);

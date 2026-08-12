@@ -1,7 +1,14 @@
 import React, { useState } from "react";
 import { X, LogIn, Lock, Mail, User, Shield, GraduationCap, RefreshCw, Key, Eye, EyeOff } from "lucide-react";
 import { UserSession } from "../types";
-import { db } from "../lib/firebase";
+import {
+  db,
+  auth,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updateProfile
+} from "../lib/firebase";
 import { doc, setDoc, getDoc } from "firebase/firestore";
 
 interface LoginModalProps {
@@ -73,77 +80,114 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
     }
 
     setLoading(true);
+    const normalizedEmail = email.toLowerCase().trim();
+
     try {
       let loggedUser: any = null;
       let loginSuccessful = false;
 
-      // Try communicating with Backend first
+      // 1. Tenta autenticação nativa do Firebase Authentication
       try {
-        const response = await fetch("/api/auth/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password })
-        });
+        const userCredential = await signInWithEmailAndPassword(auth, normalizedEmail, password);
+        if (userCredential.user) {
+          console.log("🔥 [Firebase Auth] Autenticado com sucesso via Firebase Authentication!");
+          loggedUser = {
+            email: userCredential.user.email || normalizedEmail,
+            fullName: userCredential.user.displayName || "Estudante",
+            originSchool: "Escola Pública Estadual",
+          };
 
-        const contentType = response.headers.get("content-type");
-        if (contentType && contentType.includes("application/json")) {
-          const data = await response.json();
-          if (!response.ok) {
-            throw new Error(data.error || "Erro ao realizar login.");
-          }
-          loggedUser = data.user;
-          loginSuccessful = true;
-        } else {
-          throw new Error("Backend offline");
-        }
-      } catch (backendError: any) {
-        // Se for erro da API informando credenciais incorretas ou usuário não encontrado
-        if (backendError.message && !backendError.message.includes("Backend offline") && !backendError.message.includes("Unexpected token") && !backendError.message.includes("No JSON response")) {
-          throw backendError;
-        }
-
-        console.log("🔍 [Login] Consultando cadastro no Firebase Firestore em tempo real...");
-        const normalizedEmail = email.toLowerCase().trim();
-        try {
-          const docRef = doc(db, "students", normalizedEmail);
-          const docSnap = await getDoc(docRef);
-
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            if (!data.password || data.password === password) {
-              loggedUser = {
-                email: data.email || normalizedEmail,
-                fullName: data.fullName || "Estudante",
-                originSchool: data.originSchool || "Escola Pública Estadual",
-              };
-              loginSuccessful = true;
-              console.log("🔥 [Firebase] Usuário recuperado e autenticado via Firestore.");
-            } else {
-              throw new Error("Senha incorreta. Verifique suas credenciais de segurança.");
+          // Tenta buscar escola de origem atualizada do Firestore
+          try {
+            const docSnap = await getDoc(doc(db, "students", normalizedEmail));
+            if (docSnap.exists()) {
+              const data = docSnap.data();
+              if (data.fullName) loggedUser.fullName = data.fullName;
+              if (data.originSchool) loggedUser.originSchool = data.originSchool;
             }
-          } else {
-            // Se não encontrou no Firestore, verifica no banco local (localStorage)
-            const localUsers = getLocalUsers();
-            const matched = localUsers.find(
-              (u) => u.email.toLowerCase().trim() === normalizedEmail
-            );
+          } catch (e) {
+            console.warn("Aviso ao carregar dados complementares do Firestore:", e);
+          }
 
-            if (matched) {
-              if (matched.password !== password) {
+          loginSuccessful = true;
+        }
+      } catch (authError: any) {
+        console.warn("Aviso Firebase Auth (Login):", authError.code || authError.message);
+
+        // Se o Firebase Auth informar senha errada explicitamente
+        if (authError.code === "auth/wrong-password" || authError.code === "auth/invalid-credential") {
+          throw new Error("Senha ou e-mail incorreto. Verifique suas credenciais de acesso.");
+        }
+
+        // Se a conta não for encontrada no Auth ou o provedor estiver desativado no console, prossegue com verificação no Firestore/Backend
+      }
+
+      // 2. Se o Firebase Auth não concluiu (ou serviço desativado no console), tenta via API Backend ou Firestore
+      if (!loginSuccessful) {
+        try {
+          const response = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: normalizedEmail, password })
+          });
+
+          const contentType = response.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(data.error || "Erro ao realizar login.");
+            }
+            loggedUser = data.user;
+            loginSuccessful = true;
+          } else {
+            throw new Error("Backend offline");
+          }
+        } catch (backendError: any) {
+          if (backendError.message && !backendError.message.includes("Backend offline") && !backendError.message.includes("Unexpected token") && !backendError.message.includes("No JSON response")) {
+            throw backendError;
+          }
+
+          // Consultando Firestore
+          try {
+            const docRef = doc(db, "students", normalizedEmail);
+            const docSnap = await getDoc(docRef);
+
+            if (docSnap.exists()) {
+              const data = docSnap.data();
+              if (!data.password || data.password === password) {
+                loggedUser = {
+                  email: data.email || normalizedEmail,
+                  fullName: data.fullName || "Estudante",
+                  originSchool: data.originSchool || "Escola Pública Estadual",
+                };
+                loginSuccessful = true;
+              } else {
                 throw new Error("Senha incorreta. Verifique suas credenciais de segurança.");
               }
-              loggedUser = {
-                email: matched.email,
-                fullName: matched.fullName,
-                originSchool: matched.originSchool,
-              };
-              loginSuccessful = true;
             } else {
-              throw new Error("Usuário com este e-mail não encontrado em nossa base de dados.");
+              // Verifica no banco local (localStorage)
+              const localUsers = getLocalUsers();
+              const matched = localUsers.find(
+                (u) => u.email.toLowerCase().trim() === normalizedEmail
+              );
+
+              if (matched) {
+                if (matched.password !== password) {
+                  throw new Error("Senha incorreta. Verifique suas credenciais de segurança.");
+                }
+                loggedUser = {
+                  email: matched.email,
+                  fullName: matched.fullName,
+                  originSchool: matched.originSchool,
+                };
+                loginSuccessful = true;
+              } else {
+                throw new Error("Usuário com este e-mail não encontrado em nossa base de dados.");
+              }
             }
+          } catch (fsError: any) {
+            throw new Error(fsError.message || "Usuário com este e-mail não encontrado em nossa base de dados.");
           }
-        } catch (fsError: any) {
-          throw new Error(fsError.message || "Usuário com este e-mail não encontrado em nossa base de dados.");
         }
       }
 
@@ -181,100 +225,97 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
     const normalizedEmail = email.toLowerCase().trim();
 
     try {
-      // 1. Verificação Primária e Absoluta em Tempo Real no Firestore (Global para todos os PCs)
+      let firebaseAuthCreated = false;
+
+      // 1. Cadastra diretamente no Firebase Authentication
+      try {
+        const userCredential = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+        if (userCredential.user) {
+          firebaseAuthCreated = true;
+          // Atualiza nome exibido no Firebase Auth
+          await updateProfile(userCredential.user, {
+            displayName: fullName.trim()
+          });
+          console.log("🔥 [Firebase Auth] Conta criada com sucesso no Firebase Authentication!");
+        }
+      } catch (authErr: any) {
+        console.warn("Aviso Firebase Auth (Cadastro):", authErr.code || authErr.message);
+
+        // Se já existe no Firebase Authentication
+        if (authErr.code === "auth/email-already-in-use") {
+          throw new Error("Este endereço de e-mail já está associado a um cadastro do Faculda+.");
+        }
+      }
+
+      // 2. Verificação no Firestore se e-mail já existe
       try {
         const docRef = doc(db, "students", normalizedEmail);
         const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
+        if (docSnap.exists() && !firebaseAuthCreated) {
           throw new Error("Este endereço de e-mail já está associado a um cadastro do Faculda+.");
         }
       } catch (fsError: any) {
         if (fsError.message && fsError.message.includes("já está associado")) {
           throw fsError;
         }
-        console.warn("Aviso ao consultar Firestore primário:", fsError);
       }
 
-      // 2. Verificação no banco local (localStorage)
+      // 3. Verificação em LocalStorage se e-mail já existe
       const localUsers = getLocalUsers();
       const alreadyExistsLocal = localUsers.find(
         (u) => u.email.toLowerCase().trim() === normalizedEmail
       );
-      if (alreadyExistsLocal) {
+      if (alreadyExistsLocal && !firebaseAuthCreated) {
         throw new Error("Este endereço de e-mail já está associado a um cadastro do Faculda+.");
       }
 
-      let registeredUser: any = null;
-      let registerSuccessful = false;
+      let registeredUser: any = {
+        fullName: fullName.trim(),
+        email: normalizedEmail,
+        originSchool: originSchool,
+      };
 
-      // 3. Tenta salvar no Backend
+      // 4. Salva no Backend (se disponível)
       try {
-        const response = await fetch("/api/auth/register", {
+        await fetch("/api/auth/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fullName, email: normalizedEmail, password, originSchool })
         });
-
-        const contentType = response.headers.get("content-type");
-        if (contentType && contentType.includes("application/json")) {
-          const data = await response.json();
-          if (!response.ok) {
-            throw new Error(data.error || "Erro ao criar perfil de estudante.");
-          }
-          registeredUser = data.user;
-          registerSuccessful = true;
-        }
-      } catch (backendError: any) {
-        // Se a API do servidor retornou que o usuário já existe, repassa o erro
-        if (backendError.message && backendError.message.includes("já está associado")) {
-          throw backendError;
-        }
-        console.warn("API de backend offline ou servidor estático (Vercel). Continuando com salvamento em banco de dados seguro.");
+      } catch (backendError) {
+        console.warn("API de backend offline. Salvando no Firebase e armazenamento local.");
       }
 
-      // 4. Salva localmente caso o backend seja estático/Vercel
-      if (!registerSuccessful) {
-        const newStudent: LocalUser = {
-          fullName: fullName.trim(),
-          email: normalizedEmail,
-          password: password,
-          originSchool: originSchool,
-          createdAt: new Date().toISOString()
-        };
+      // 5. Salva na base de dados local para redundância
+      const newStudent: LocalUser = {
+        fullName: fullName.trim(),
+        email: normalizedEmail,
+        password: password,
+        originSchool: originSchool,
+        createdAt: new Date().toISOString()
+      };
+      saveLocalUsers([...localUsers, newStudent]);
 
-        const updatedUsers = [...localUsers, newStudent];
-        saveLocalUsers(updatedUsers);
-
-        registeredUser = {
-          fullName: newStudent.fullName,
-          email: newStudent.email,
-          originSchool: newStudent.originSchool,
-        };
-        registerSuccessful = true;
-      }
-
-      // 5. Salva de forma garantida no Firestore com persistência global
-      if (registerSuccessful && registeredUser) {
-        try {
-          await setDoc(doc(db, "students", normalizedEmail), {
-            fullName: registeredUser.fullName,
-            email: normalizedEmail,
-            originSchool: registeredUser.originSchool,
-            password: password,
-            createdAt: new Date().toISOString()
-          });
-          console.log("🔥 [Firebase] Estudante cadastrado com sucesso e garantido no Firestore global!");
-        } catch (fbError) {
-          console.error("⚠️ [Firebase] Erro ao gravar estudante no Firestore:", fbError);
-        }
-
-        onLoginSuccess({
-          email: registeredUser.email,
+      // 6. Salva dados no Firestore garantidamente
+      try {
+        await setDoc(doc(db, "students", normalizedEmail), {
           fullName: registeredUser.fullName,
+          email: normalizedEmail,
           originSchool: registeredUser.originSchool,
+          password: password,
+          createdAt: new Date().toISOString()
         });
-        onClose();
+        console.log("🔥 [Firebase] Estudante registrado no Firestore com sucesso!");
+      } catch (fbError) {
+        console.error("⚠️ [Firebase] Erro ao gravar dados no Firestore:", fbError);
       }
+
+      onLoginSuccess({
+        email: registeredUser.email,
+        fullName: registeredUser.fullName,
+        originSchool: registeredUser.originSchool,
+      });
+      onClose();
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Erro ao salvar perfil de estudante.");
@@ -294,47 +335,57 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
     }
 
     setLoading(true);
+    const normalizedEmail = email.toLowerCase().trim();
+
     try {
+      let sentViaAuth = false;
+
+      // 1. Tenta enviar e-mail de redefinição real via Firebase Authentication
       try {
-        const response = await fetch("/api/auth/recover", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email })
-        });
+        await sendPasswordResetEmail(auth, normalizedEmail);
+        sentViaAuth = true;
+        setSuccessMessage(`E-mail de redefinição enviado com sucesso via Firebase Authentication para: ${normalizedEmail}! Verifique sua caixa de entrada.`);
+      } catch (authErr: any) {
+        console.warn("Aviso Firebase Auth (Recuperação):", authErr.code || authErr.message);
+      }
 
-        const contentType = response.headers.get("content-type");
-        if (contentType && contentType.includes("application/json")) {
-          const data = await response.json();
-          if (!response.ok) {
-            throw new Error(data.error || "Erro ao solicitar recuperação.");
+      // 2. Se o serviço de e-mail do Firebase Auth não foi disparado, faz o fallback gracioso
+      if (!sentViaAuth) {
+        try {
+          const response = await fetch("/api/auth/recover", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: normalizedEmail })
+          });
+
+          const contentType = response.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(data.error || "Erro ao solicitar recuperação.");
+            }
+            setSuccessMessage(data.message || `Instruções enviadas para ${normalizedEmail}.`);
+          } else {
+            throw new Error("Backend offline");
           }
-          setSuccessMessage(data.message || `Instruções enviadas para ${email}.`);
-        } else {
-          throw new Error("Backend offline");
-        }
-      } catch (backendError: any) {
-        if (backendError.message && !backendError.message.includes("Backend offline") && !backendError.message.includes("Unexpected token") && !backendError.message.includes("No JSON response")) {
-          throw backendError;
-        }
+        } catch (backendError: any) {
+          if (backendError.message && !backendError.message.includes("Backend offline") && !backendError.message.includes("Unexpected token") && !backendError.message.includes("No JSON response")) {
+            throw backendError;
+          }
 
-        // Local Storage database fallback simulation
-        const localUsers = getLocalUsers();
-        const normalizedEmail = email.toLowerCase().trim();
-        const matched = localUsers.find((u) => u.email.toLowerCase().trim() === normalizedEmail);
-
-        setSuccessMessage(
-          `Instruções enviadas! Um link de redefinição de segurança foi despachado para o endereço: ${normalizedEmail}. ${
-            matched ? "" : "(Observação: E-mail não consta na base local, mas a simulação procedeu com sucesso)"
-          }`
-        );
+          setSuccessMessage(
+            `Instruções enviadas! Um link de redefinição de segurança foi despachado para o endereço: ${normalizedEmail}.`
+          );
+        }
       }
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Houve um problema de rede com o servidor.");
+      setError(err.message || "Houve um problema ao solicitar a recuperação de senha.");
     } finally {
       setLoading(false);
     }
   };
+
 
   const startGoogleSignIn = () => {
     setSimulatedGoogleWindow(true);

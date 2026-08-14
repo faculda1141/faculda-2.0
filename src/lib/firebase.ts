@@ -11,16 +11,27 @@ import {
 } from "firebase/auth";
 import firebaseConfigFile from "../../firebase-applet-config.json";
 
-// Suporte flexível para Variáveis de Ambiente (Vite/GitHub/Vercel) ou arquivo de configuração local
+// Credenciais oficiais do projeto Firebase
+const defaultFirebaseConfig = {
+  apiKey: "AIzaSyBVYyTalTXDZTbmzM418Vn27h8EvXnX2Gk",
+  authDomain: "gen-lang-client-0714910626.firebaseapp.com",
+  projectId: "gen-lang-client-0714910626",
+  storageBucket: "gen-lang-client-0714910626.firebasestorage.app",
+  messagingSenderId: "348313771316",
+  appId: "1:348313771316:web:5265ac4c23e03da2541961",
+  firestoreDatabaseId: "ai-studio-081ad83a-6c56-49f1-bf6b-908ef060e6c9"
+};
+
+// Suporte flexível para Variáveis de Ambiente (Vite/GitHub/Vercel) ou arquivo de configuração
 const env = (import.meta as any).env || {};
 const config = {
-  projectId: env.VITE_FIREBASE_PROJECT_ID || firebaseConfigFile.projectId,
-  appId: env.VITE_FIREBASE_APP_ID || firebaseConfigFile.appId,
-  apiKey: env.VITE_FIREBASE_API_KEY || firebaseConfigFile.apiKey,
-  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfigFile.authDomain,
-  firestoreDatabaseId: env.VITE_FIREBASE_DATABASE_ID || firebaseConfigFile.firestoreDatabaseId,
-  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfigFile.storageBucket,
-  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfigFile.messagingSenderId,
+  apiKey: env.VITE_FIREBASE_API_KEY || firebaseConfigFile?.apiKey || defaultFirebaseConfig.apiKey,
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfigFile?.authDomain || defaultFirebaseConfig.authDomain,
+  projectId: env.VITE_FIREBASE_PROJECT_ID || firebaseConfigFile?.projectId || defaultFirebaseConfig.projectId,
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfigFile?.storageBucket || defaultFirebaseConfig.storageBucket,
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfigFile?.messagingSenderId || defaultFirebaseConfig.messagingSenderId,
+  appId: env.VITE_FIREBASE_APP_ID || firebaseConfigFile?.appId || defaultFirebaseConfig.appId,
+  firestoreDatabaseId: env.VITE_FIREBASE_DATABASE_ID || firebaseConfigFile?.firestoreDatabaseId || defaultFirebaseConfig.firestoreDatabaseId,
 };
 
 // Inicializa o aplicativo Firebase

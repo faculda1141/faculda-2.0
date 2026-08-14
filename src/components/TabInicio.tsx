@@ -46,12 +46,6 @@ export default function TabInicio({
             >
               Ver Editais Ativos
             </button>
-            <button
-              onClick={() => onNavigateTab("orientacao")}
-              className="px-4 py-2 bg-[#0b4885] border border-slate-500/50 hover:bg-[#083562] text-white text-xs font-semibold rounded transition duration-150 cursor-pointer"
-            >
-              Conversar com Assistente IA
-            </button>
           </div>
         </div>
       </div>

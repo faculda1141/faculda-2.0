@@ -67,9 +67,6 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
   const [originSchool, setOriginSchool] = useState("Escola Pública Estadual");
   const [agreeTerms, setAgreeTerms] = useState(true);
 
-  // Google flow simulation
-  const [simulatedGoogleWindow, setSimulatedGoogleWindow] = useState(false);
-
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -216,6 +213,11 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
       return;
     }
 
+    if (password.length < 6) {
+      setError("A senha deve conter no mínimo 6 caracteres.");
+      return;
+    }
+
     if (!agreeTerms) {
       setError("Você deve aceitar a Declaração de Tratamento de Dados da SEED-PR.");
       return;
@@ -227,23 +229,36 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
     try {
       let firebaseAuthCreated = false;
 
-      // 1. Cadastra diretamente no Firebase Authentication
+      // 1. Cadastra diretamente no Firebase Authentication usando o SDK oficial
       try {
         const userCredential = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
         if (userCredential.user) {
           firebaseAuthCreated = true;
-          // Atualiza nome exibido no Firebase Auth
+          // Atualiza o nome de exibição no perfil do Firebase Auth
           await updateProfile(userCredential.user, {
             displayName: fullName.trim()
           });
-          console.log("🔥 [Firebase Auth] Conta criada com sucesso no Firebase Authentication!");
+          console.log("🔥 [Firebase Auth] Conta criada com sucesso no Firebase Authentication para:", normalizedEmail);
         }
       } catch (authErr: any) {
-        console.warn("Aviso Firebase Auth (Cadastro):", authErr.code || authErr.message);
+        console.warn("Aviso Firebase Auth (Cadastro):", authErr.code, authErr.message);
 
-        // Se já existe no Firebase Authentication
-        if (authErr.code === "auth/email-already-in-use") {
-          throw new Error("Este endereço de e-mail já está associado a um cadastro do Faculda+.");
+        // Tratamento de e-mail duplicado no Firebase Authentication
+        if (
+          authErr.code === "auth/email-already-in-use" ||
+          authErr.message?.toLowerCase().includes("email-already-in-use") ||
+          authErr.message?.toLowerCase().includes("already in use")
+        ) {
+          throw new Error("Este endereço de e-mail já está associado a um cadastro do Faculda+. Faça login ou utilize a recuperação de senha.");
+        } else if (authErr.code === "auth/weak-password") {
+          throw new Error("A senha escolhida é muito fraca. Insira no mínimo 6 caracteres.");
+        } else if (authErr.code === "auth/invalid-email") {
+          throw new Error("O endereço de e-mail digitado é inválido.");
+        } else if (authErr.code === "auth/operation-not-allowed") {
+          console.warn("Provedor de e-mail/senha não habilitado no console Firebase ainda. Prosseguindo com persistência Firestore.");
+        } else {
+          // Outro erro de autenticação
+          throw new Error(authErr.message || "Erro ao registrar conta no Firebase Authentication.");
         }
       }
 
@@ -269,7 +284,7 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
         throw new Error("Este endereço de e-mail já está associado a um cadastro do Faculda+.");
       }
 
-      let registeredUser: any = {
+      const registeredUser = {
         fullName: fullName.trim(),
         email: normalizedEmail,
         originSchool: originSchool,
@@ -296,7 +311,7 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
       };
       saveLocalUsers([...localUsers, newStudent]);
 
-      // 6. Salva dados no Firestore garantidamente
+      // 6. Salva dados no Firestore com persistência
       try {
         await setDoc(doc(db, "students", normalizedEmail), {
           fullName: registeredUser.fullName,
@@ -330,7 +345,7 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
     setSuccessMessage(null);
 
     if (!email) {
-      setError("Indique seu e-mail cadastrado.");
+      setError("Indique o seu endereço de e-mail cadastrado.");
       return;
     }
 
@@ -340,16 +355,24 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
     try {
       let sentViaAuth = false;
 
-      // 1. Tenta enviar e-mail de redefinição real via Firebase Authentication
+      // 1. Envia e-mail oficial de redefinição via Firebase Authentication
       try {
         await sendPasswordResetEmail(auth, normalizedEmail);
         sentViaAuth = true;
-        setSuccessMessage(`E-mail de redefinição enviado com sucesso via Firebase Authentication para: ${normalizedEmail}! Verifique sua caixa de entrada.`);
+        setSuccessMessage(
+          `✉️ E-mail de redefinição enviado com sucesso para ${normalizedEmail}! Acesse sua caixa de entrada (ou pasta de spam) para redefinir sua senha.`
+        );
       } catch (authErr: any) {
         console.warn("Aviso Firebase Auth (Recuperação):", authErr.code || authErr.message);
+
+        if (authErr.code === "auth/user-not-found") {
+          throw new Error("Este e-mail ainda não está cadastrado em nossa base. Verifique se digitou corretamente ou crie uma nova conta.");
+        } else if (authErr.code === "auth/invalid-email") {
+          throw new Error("Por favor, insira um endereço de e-mail válido.");
+        }
       }
 
-      // 2. Se o serviço de e-mail do Firebase Auth não foi disparado, faz o fallback gracioso
+      // 2. Fallback caso o provedor de e-mail do Firebase não tenha respondido
       if (!sentViaAuth) {
         try {
           const response = await fetch("/api/auth/recover", {
@@ -364,7 +387,7 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
             if (!response.ok) {
               throw new Error(data.error || "Erro ao solicitar recuperação.");
             }
-            setSuccessMessage(data.message || `Instruções enviadas para ${normalizedEmail}.`);
+            setSuccessMessage(data.message || `Instruções de redefinição enviadas para ${normalizedEmail}.`);
           } else {
             throw new Error("Backend offline");
           }
@@ -374,7 +397,7 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
           }
 
           setSuccessMessage(
-            `Instruções enviadas! Um link de redefinição de segurança foi despachado para o endereço: ${normalizedEmail}.`
+            `✉️ Solicitação registrada! As instruções para redefinir a senha do e-mail ${normalizedEmail} foram despachadas. Cheque sua caixa de entrada!`
           );
         }
       }
@@ -386,25 +409,6 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
     }
   };
 
-
-  const startGoogleSignIn = () => {
-    setSimulatedGoogleWindow(true);
-    setLoading(true);
-    setError(null);
-
-    setTimeout(() => {
-      setSimulatedGoogleWindow(false);
-      setLoading(false);
-      
-      // Perform simulated auth
-      onLoginSuccess({
-        email: userEmailFromMetadata,
-        fullName: "Usuário Google Curitiba",
-        originSchool: "Colégio Estadual do Paraná (CEP)",
-      });
-      onClose();
-    }, 1800);
-  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
@@ -441,51 +445,41 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
 
         {/* Main Content Areas */}
         <div className="p-5">
-          {simulatedGoogleWindow ? (
-            <div className="py-10 flex flex-col items-center justify-center space-y-4" id="google-loader">
-              <div className="w-12 h-12 rounded-full border-4 border-slate-200 border-t-[#4285F4] animate-spin"></div>
-              <p className="text-sm font-semibold text-slate-700 animate-pulse">
-                Conectando à sua Conta Google paranaense...
-              </p>
-              <p className="text-xs text-slate-500 font-mono">{userEmailFromMetadata}</p>
+          {/* Form Toggles */}
+          {activeTab !== "recover" && (
+            <div className="grid grid-cols-2 gap-2 border-b border-slate-100 pb-4 mb-4">
+              <button
+                onClick={() => {
+                  setActiveTab("login");
+                  setError(null);
+                  setSuccessMessage(null);
+                }}
+                id="modal-toggle-login"
+                className={`py-2 text-xs font-semibold rounded uppercase tracking-wider transition ${
+                  activeTab === "login"
+                    ? "bg-[#002f6c] text-white shadow-sm"
+                    : "text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                Fazer Login
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab("register");
+                  setError(null);
+                  setSuccessMessage(null);
+                }}
+                id="modal-toggle-register"
+                className={`py-2 text-xs font-semibold rounded uppercase tracking-wider transition ${
+                  activeTab === "register"
+                    ? "bg-[#002f6c] text-white shadow-sm"
+                    : "text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                Nova Conta
+              </button>
             </div>
-          ) : (
-            <>
-              {/* Form Toggles */}
-              {activeTab !== "recover" && (
-                <div className="grid grid-cols-2 gap-2 border-b border-slate-100 pb-4 mb-4">
-                  <button
-                    onClick={() => {
-                      setActiveTab("login");
-                      setError(null);
-                      setSuccessMessage(null);
-                    }}
-                    id="modal-toggle-login"
-                    className={`py-2 text-xs font-semibold rounded uppercase tracking-wider transition ${
-                      activeTab === "login"
-                        ? "bg-[#002f6c] text-white shadow-sm"
-                        : "text-slate-600 hover:bg-slate-50"
-                    }`}
-                  >
-                    Fazer Login
-                  </button>
-                  <button
-                    onClick={() => {
-                      setActiveTab("register");
-                      setError(null);
-                      setSuccessMessage(null);
-                    }}
-                    id="modal-toggle-register"
-                    className={`py-2 text-xs font-semibold rounded uppercase tracking-wider transition ${
-                      activeTab === "register"
-                        ? "bg-[#002f6c] text-white shadow-sm"
-                        : "text-slate-600 hover:bg-slate-50"
-                    }`}
-                  >
-                    Nova Conta
-                  </button>
-                </div>
-              )}
+          )}
 
               {/* Status alerts */}
               {error && (
@@ -748,49 +742,6 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
                   </form>
                 </div>
               )}
-
-              {/* SOCIAL SIGN IN ALTERNATIVES */}
-              {activeTab !== "recover" && (
-                <div className="mt-6 border-t border-slate-100 pt-5 space-y-3">
-                  <div className="relative flex py-1 items-center">
-                    <div className="flex-grow border-t border-slate-200"></div>
-                    <span className="flex-shrink mx-4 text-slate-400 text-[10px] font-semibold uppercase tracking-widest">
-                      Entrada Externa Rápida
-                    </span>
-                    <div className="flex-grow border-t border-slate-200"></div>
-                  </div>
-
-                  <button
-                    onClick={startGoogleSignIn}
-                    id="btn-google-login"
-                    type="button"
-                    className="w-full py-2.5 border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded font-semibold text-xs tracking-wider transition flex items-center justify-center space-x-2 cursor-pointer shadow-sm hover:shadow"
-                  >
-                    {/* Google clean SVG icon */}
-                    <svg className="w-4 h-4 mr-1 shrink-0" viewBox="0 0 24 24">
-                      <path
-                        fill="#4285F4"
-                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22c-.13-.24-.22-.49-.35-.74s-.1-.51-.15-.76z"
-                      />
-                      <path
-                        fill="#EA4335"
-                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                      />
-                    </svg>
-                    <span>Seguir Conexão com Google</span>
-                  </button>
-                </div>
-              )}
-            </>
-          )}
         </div>
       </div>
     </div>

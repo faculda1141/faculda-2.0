@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { Users, Search, RefreshCw, Database, ShieldAlert, GraduationCap, Check, HelpCircle, Server, Lock, Eye, EyeOff, AlertCircle, LogOut, Plus, Trash2, RotateCcw, X, Building } from "lucide-react";
+import { Users, Search, RefreshCw, Database, ShieldAlert, GraduationCap, Check, HelpCircle, Server, Lock, Eye, EyeOff, AlertCircle, LogOut, Plus, Trash2, RotateCcw, X, Building, Ban, UserCheck, ShieldX, Key } from "lucide-react";
 import { db } from "../lib/firebase";
-import { collection, getDocs, query, orderBy } from "firebase/firestore";
+import { collection, getDocs, query, orderBy, doc, updateDoc, setDoc } from "firebase/firestore";
 import { Institution } from "../types";
 
 interface AdminUser {
@@ -9,6 +9,9 @@ interface AdminUser {
   email: string;
   originSchool: string;
   createdAt: string;
+  isBanned?: boolean;
+  banReason?: string;
+  bannedAt?: string;
 }
 
 interface TabAdminProps {
@@ -180,7 +183,10 @@ export default function TabAdmin({
           fullName: data.fullName || "Sem nome",
           email: data.email || doc.id,
           originSchool: data.originSchool || "Não informada",
-          createdAt: data.createdAt || new Date().toISOString()
+          createdAt: data.createdAt || new Date().toISOString(),
+          isBanned: data.isBanned || false,
+          banReason: data.banReason || "",
+          bannedAt: data.bannedAt || ""
         });
       });
 
@@ -196,6 +202,231 @@ export default function TabAdmin({
       setError("Não foi possível conectar ou buscar os dados diretamente do Firebase Firestore. Verifique suas regras de segurança ou conexão.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Estado para modal de banimento
+  const [banningUser, setBanningUser] = useState<AdminUser | null>(null);
+  const [banReasonInput, setBanReasonInput] = useState("");
+  const [actionInProgress, setActionInProgress] = useState(false);
+
+  // Estado para modal de redefinição de senha pelo Administrador
+  const [resettingUser, setResettingUser] = useState<AdminUser | null>(null);
+  const [adminNewPasswordInput, setAdminNewPasswordInput] = useState("");
+  const [adminResetSuccess, setAdminResetSuccess] = useState<string | null>(null);
+
+  // Função para banir usuário
+  const handleBanUser = async () => {
+    if (!banningUser) return;
+    const email = banningUser.email.toLowerCase().trim();
+    const reason = banReasonInput.trim() || "Violação das diretrizes e termos de uso do portal";
+
+    setActionInProgress(true);
+    setError(null);
+
+    try {
+      // 1. Tenta banir no servidor Express
+      try {
+        await fetch("/api/admin/ban-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, reason })
+        });
+      } catch (err) {
+        console.warn("API de servidor offline para banimento, atualizando Firebase e local.");
+      }
+
+      // 2. Atualiza no Firebase Firestore
+      try {
+        const docRef = doc(db, "students", email);
+        await setDoc(docRef, {
+          isBanned: true,
+          banReason: reason,
+          bannedAt: new Date().toISOString()
+        }, { merge: true });
+        console.log("🔥 [Firestore] Usuário marcado como banido com sucesso.");
+      } catch (err) {
+        console.warn("Aviso ao atualizar status de banimento no Firestore:", err);
+      }
+
+      // 3. Atualiza no LocalStorage
+      try {
+        const localData = localStorage.getItem("guiaestudantil_users_db");
+        if (localData) {
+          const parsed = JSON.parse(localData);
+          const updated = parsed.map((u: any) => 
+            u.email.toLowerCase().trim() === email
+              ? { ...u, isBanned: true, banReason: reason, bannedAt: new Date().toISOString() }
+              : u
+          );
+          localStorage.setItem("guiaestudantil_users_db", JSON.stringify(updated));
+        }
+
+        // Se o usuário banido for a sessão atual ativa, desloga imediatamente
+        const currentSession = localStorage.getItem("guiaestudantil_session");
+        if (currentSession) {
+          const parsed = JSON.parse(currentSession);
+          if (parsed.email?.toLowerCase().trim() === email) {
+            localStorage.removeItem("guiaestudantil_session");
+          }
+        }
+      } catch (err) {
+        console.error("Erro ao sincronizar banimento local:", err);
+      }
+
+      // 4. Atualiza estado em tela
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.email.toLowerCase().trim() === email
+            ? { ...u, isBanned: true, banReason: reason, bannedAt: new Date().toISOString() }
+            : u
+        )
+      );
+
+      setSuccess(`Usuário ${banningUser.fullName} (${email}) foi banido com sucesso.`);
+      setBanningUser(null);
+      setBanReasonInput("");
+      setTimeout(() => setSuccess(null), 4000);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Erro ao banir usuário.");
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  // Função para desbanir / reativar usuário
+  const handleUnbanUser = async (user: AdminUser) => {
+    const email = user.email.toLowerCase().trim();
+    if (!window.confirm(`Deseja realmente desbanir e reativar o acesso de ${user.fullName} (${email})?`)) {
+      return;
+    }
+
+    setActionInProgress(true);
+    setError(null);
+
+    try {
+      // 1. Tenta desbanir no servidor
+      try {
+        await fetch("/api/admin/unban-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email })
+        });
+      } catch (err) {
+        console.warn("API de servidor offline para desbanimento, atualizando Firebase e local.");
+      }
+
+      // 2. Atualiza no Firestore
+      try {
+        const docRef = doc(db, "students", email);
+        await setDoc(docRef, {
+          isBanned: false,
+          banReason: "",
+          bannedAt: ""
+        }, { merge: true });
+        console.log("🔥 [Firestore] Usuário desbanido com sucesso.");
+      } catch (err) {
+        console.warn("Aviso ao atualizar status no Firestore:", err);
+      }
+
+      // 3. Atualiza no LocalStorage
+      try {
+        const localData = localStorage.getItem("guiaestudantil_users_db");
+        if (localData) {
+          const parsed = JSON.parse(localData);
+          const updated = parsed.map((u: any) => 
+            u.email.toLowerCase().trim() === email
+              ? { ...u, isBanned: false, banReason: undefined, bannedAt: undefined }
+              : u
+          );
+          localStorage.setItem("guiaestudantil_users_db", JSON.stringify(updated));
+        }
+      } catch (err) {
+        console.error("Erro ao sincronizar desbanimento local:", err);
+      }
+
+      // 4. Atualiza estado em tela
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.email.toLowerCase().trim() === email
+            ? { ...u, isBanned: false, banReason: undefined, bannedAt: undefined }
+            : u
+        )
+      );
+
+      setSuccess(`Acesso do usuário ${user.fullName} (${email}) reativado com sucesso!`);
+      setTimeout(() => setSuccess(null), 4000);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Erro ao desbanir usuário.");
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  // Função para redefinir senha de usuário diretamente pelo Administrador
+  const handleAdminResetPassword = async () => {
+    if (!resettingUser) return;
+    const email = resettingUser.email.toLowerCase().trim();
+    const newPwd = adminNewPasswordInput.trim();
+
+    if (!newPwd || newPwd.length < 6) {
+      setError("A nova senha deve possuir pelo menos 6 caracteres.");
+      return;
+    }
+
+    setActionInProgress(true);
+    setError(null);
+
+    try {
+      // 1. Tenta atualizar no servidor Express
+      try {
+        await fetch("/api/admin/reset-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, newPassword: newPwd })
+        });
+      } catch (err) {
+        console.warn("API de servidor offline para redefinição de senha, atualizando Firestore.");
+      }
+
+      // 2. Atualiza no Firestore
+      try {
+        await setDoc(doc(db, "students", email), {
+          password: newPwd,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+        console.log("🔥 [Firestore] Senha do estudante atualizada com sucesso.");
+      } catch (err) {
+        console.warn("Aviso ao atualizar senha no Firestore:", err);
+      }
+
+      // 3. Atualiza no LocalStorage
+      try {
+        const localData = localStorage.getItem("guiaestudantil_users_db");
+        if (localData) {
+          const parsed = JSON.parse(localData);
+          const updated = parsed.map((u: any) =>
+            u.email.toLowerCase().trim() === email
+              ? { ...u, password: newPwd }
+              : u
+          );
+          localStorage.setItem("guiaestudantil_users_db", JSON.stringify(updated));
+        }
+      } catch (err) {
+        console.warn("Erro ao salvar no LocalStorage:", err);
+      }
+
+      setAdminResetSuccess(`Senha de ${resettingUser.fullName} (${email}) redefinida com sucesso para "${newPwd}".`);
+      setTimeout(() => setAdminResetSuccess(null), 6000);
+      setResettingUser(null);
+      setAdminNewPasswordInput("");
+    } catch (err: any) {
+      console.error(err);
+      setError("Falha ao redefinir a senha do estudante.");
+    } finally {
+      setActionInProgress(false);
     }
   };
 
@@ -372,11 +603,18 @@ export default function TabAdmin({
         </div>
       )}
 
+      {adminResetSuccess && (
+        <div className="bg-amber-50 text-amber-900 border-l-4 border-amber-600 p-3.5 rounded text-xs font-medium flex items-center space-x-2">
+          <Key size={16} className="text-amber-600 shrink-0" />
+          <span>{adminResetSuccess}</span>
+        </div>
+      )}
+
       {/* Sub-Tab Content: Usuarios */}
       {adminSubTab === "usuarios" && (
         <div className="space-y-6 animate-fade-in">
           {/* Indicadores do Banco */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs flex items-center space-x-4">
               <div className="p-3 bg-blue-50 text-blue-800 rounded-full">
                 <Users size={22} />
@@ -398,6 +636,20 @@ export default function TabAdmin({
                   Vindos de Escola Pública
                 </span>
                 <span className="text-2xl font-bold text-slate-800">{publicSchoolPercentage}%</span>
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs flex items-center space-x-4">
+              <div className="p-3 bg-rose-50 text-rose-800 rounded-full">
+                <ShieldX size={22} />
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider">
+                  Usuários Banidos
+                </span>
+                <span className="text-2xl font-bold text-rose-700">
+                  {users.filter(u => u.isBanned).length}
+                </span>
               </div>
             </div>
 
@@ -466,7 +718,8 @@ export default function TabAdmin({
                       <th className="py-3 px-4">E-mail de Cadastro</th>
                       <th className="py-3 px-4">Instituição de Ensino de Origem</th>
                       <th className="py-3 px-4">Data de Registro</th>
-                      <th className="py-3 px-4 text-center">Isenção Automática</th>
+                      <th className="py-3 px-4 text-center">Status / Isenção</th>
+                      <th className="py-3 px-4 text-center">Ações de Segurança</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -475,20 +728,85 @@ export default function TabAdmin({
                                       user.originSchool.toLowerCase().includes("estadual") || 
                                       user.originSchool.toLowerCase().includes("cep") || 
                                       user.originSchool.toLowerCase().includes("federal");
+                      const isBanned = !!user.isBanned;
+
                       return (
-                        <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
-                          <td className="py-3.5 px-4 font-semibold text-slate-900">{user.fullName}</td>
+                        <tr key={idx} className={`transition-colors ${isBanned ? "bg-rose-50/50 hover:bg-rose-50" : "hover:bg-slate-50/70"}`}>
+                          <td className="py-3.5 px-4 font-semibold text-slate-900">
+                            <div className="flex items-center space-x-2">
+                              <span>{user.fullName}</span>
+                              {isBanned && (
+                                <span className="px-1.5 py-0.5 bg-rose-600 text-white rounded text-[9px] font-bold uppercase tracking-wider flex items-center space-x-1">
+                                  <Ban size={9} />
+                                  <span>Banido</span>
+                                </span>
+                              )}
+                            </div>
+                            {isBanned && user.banReason && (
+                              <p className="text-[10px] text-rose-600 font-normal mt-0.5">
+                                Motivo: {user.banReason}
+                              </p>
+                            )}
+                          </td>
                           <td className="py-3.5 px-4 font-mono text-slate-600">{user.email}</td>
                           <td className="py-3.5 px-4 text-slate-600">{user.originSchool}</td>
                           <td className="py-3.5 px-4 text-slate-500">
                             {new Date(user.createdAt).toLocaleDateString("pt-BR")} às {new Date(user.createdAt).toLocaleTimeString("pt-BR", { hour: '2-digit', minute: '2-digit' })}
                           </td>
                           <td className="py-3.5 px-4 text-center">
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                              isPublic ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-amber-50 text-amber-800 border border-amber-200"
-                            }`}>
-                              {isPublic ? "Sim (Isento)" : "Sob Análise"}
-                            </span>
+                            {isBanned ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-300">
+                                Bloqueado
+                              </span>
+                            ) : (
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                isPublic ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-amber-50 text-amber-800 border border-amber-200"
+                              }`}>
+                                {isPublic ? "Sim (Isento)" : "Sob Análise"}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4 text-center">
+                            <div className="flex items-center justify-center space-x-1.5">
+                              {/* Botão de Redefinir Senha pelo Administrador */}
+                              <button
+                                onClick={() => {
+                                  setResettingUser(user);
+                                  setAdminNewPasswordInput("aluno" + Math.floor(1000 + Math.random() * 9000));
+                                }}
+                                disabled={actionInProgress}
+                                className="inline-flex items-center space-x-1 px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-[11px] font-semibold rounded transition cursor-pointer disabled:opacity-50"
+                                title="Redefinir senha de acesso deste estudante"
+                              >
+                                <Key size={11} />
+                                <span>Senha</span>
+                              </button>
+
+                              {isBanned ? (
+                                <button
+                                  onClick={() => handleUnbanUser(user)}
+                                  disabled={actionInProgress}
+                                  className="inline-flex items-center space-x-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold rounded shadow-xs transition cursor-pointer disabled:opacity-50"
+                                  title="Desbanir usuário e restaurar acesso"
+                                >
+                                  <UserCheck size={12} />
+                                  <span>Desbanir</span>
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => {
+                                    setBanningUser(user);
+                                    setBanReasonInput("");
+                                  }}
+                                  disabled={actionInProgress}
+                                  className="inline-flex items-center space-x-1 px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 text-[11px] font-semibold rounded transition cursor-pointer disabled:opacity-50"
+                                  title="Banir este usuário do portal"
+                                >
+                                  <Ban size={12} />
+                                  <span>Banir</span>
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -505,10 +823,201 @@ export default function TabAdmin({
               </span>
               <span className="flex items-center space-x-1 text-slate-400">
                 <HelpCircle size={11} />
-                <span>As contas criadas são salvas na nuvem com criptografia de acesso padrão do Estado.</span>
+                <span>Administradores podem banir usuários imediatamente com sincronização no Firestore e no servidor.</span>
               </span>
             </div>
           </div>
+
+          {/* Modal de Confirmação de Banimento com Motivo */}
+          {banningUser && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
+              <div className="bg-white rounded-lg max-w-md w-full border border-slate-200 shadow-xl overflow-hidden">
+                <div className="bg-rose-700 p-4 text-white flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <ShieldAlert size={20} className="text-white" />
+                    <h4 className="text-sm font-bold">Banir Usuário do Portal</h4>
+                  </div>
+                  <button
+                    onClick={() => setBanningUser(null)}
+                    disabled={actionInProgress}
+                    className="p-1 hover:bg-rose-800 rounded text-rose-100 transition cursor-pointer"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div className="p-5 space-y-4">
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded text-xs text-rose-800 space-y-1">
+                    <p className="font-bold">Atenção: Ação de Segurança</p>
+                    <p>
+                      O usuário <b>{banningUser.fullName}</b> (<span className="font-mono">{banningUser.email}</span>) será imediatamente bloqueado. Ele não conseguirá mais realizar login nem acessar funcionalidades do sistema.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Motivo do Banimento (Obrigatório)
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="Ex: Tentativa de fraude em documentação de isenção, envio de dados falsos, violação das diretrizes..."
+                      value={banReasonInput}
+                      onChange={(e) => setBanReasonInput(e.target.value)}
+                      className="w-full p-2.5 border border-slate-300 rounded text-xs focus:outline-none focus:border-rose-600 focus:ring-1 focus:ring-rose-600"
+                      autoFocus
+                    />
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      <span className="text-[10px] text-slate-400 font-semibold">Sugestões rápidas:</span>
+                      {[
+                        "Dados de isenção falsos ou adulterados",
+                        "Violação das regras de conduta",
+                        "Tentativa de invasão ou abuso de requisições",
+                        "Conta duplicada / Spammer"
+                      ].map((sug, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => setBanReasonInput(sug)}
+                          className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-[10px] transition cursor-pointer"
+                        >
+                          {sug}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setBanningUser(null)}
+                      disabled={actionInProgress}
+                      className="px-3.5 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-bold rounded transition cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleBanUser}
+                      disabled={actionInProgress || !banReasonInput.trim()}
+                      className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded transition flex items-center space-x-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+                    >
+                      {actionInProgress ? (
+                        <>
+                          <RefreshCw size={13} className="animate-spin" />
+                          <span>Aplicando Banimento...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Ban size={13} />
+                          <span>Confirmar Banimento</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Modal de Redefinição de Senha pelo Administrador */}
+          {resettingUser && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
+              <div className="bg-white rounded-lg max-w-md w-full border border-slate-200 shadow-xl overflow-hidden">
+                <div className="bg-[#002f6c] p-4 text-white flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Key size={18} className="text-amber-400" />
+                    <h4 className="text-sm font-bold">Redefinir Senha do Estudante</h4>
+                  </div>
+                  <button
+                    onClick={() => setResettingUser(null)}
+                    disabled={actionInProgress}
+                    className="p-1 hover:bg-[#001d44] rounded text-slate-300 transition cursor-pointer"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div className="p-5 space-y-4">
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded text-xs text-blue-900 space-y-1">
+                    <p className="font-bold flex items-center space-x-1.5">
+                      <span>Alteração Administrativa de Credencial</span>
+                    </p>
+                    <p>
+                      Estudante: <b>{resettingUser.fullName}</b>
+                    </p>
+                    <p className="font-mono text-[11px] text-blue-700">
+                      E-mail: {resettingUser.email}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Nova Senha de Acesso (Mínimo 6 caracteres)
+                    </label>
+                    <div className="relative">
+                      <Lock size={14} className="absolute left-3 top-3 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Digite ou use a senha sugerida"
+                        value={adminNewPasswordInput}
+                        onChange={(e) => setAdminNewPasswordInput(e.target.value)}
+                        className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded text-sm font-mono focus:outline-none focus:border-[#002f6c] focus:ring-1 focus:ring-[#002f6c]"
+                        autoFocus
+                      />
+                    </div>
+                    <div className="flex justify-between items-center mt-2">
+                      <span className="text-[10px] text-slate-400">Sugestões rápidas:</span>
+                      <div className="flex space-x-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setAdminNewPasswordInput("aluno" + Math.floor(1000 + Math.random() * 9000))}
+                          className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-[10px] font-mono cursor-pointer"
+                        >
+                          Gerar Aleatória
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAdminNewPasswordInput("estudante2026")}
+                          className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-[10px] font-mono cursor-pointer"
+                        >
+                          estudante2026
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setResettingUser(null)}
+                      disabled={actionInProgress}
+                      className="px-3.5 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-bold rounded transition cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAdminResetPassword}
+                      disabled={actionInProgress || adminNewPasswordInput.trim().length < 6}
+                      className="px-4 py-2 bg-[#002f6c] hover:bg-[#001d44] text-white text-xs font-bold rounded transition flex items-center space-x-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+                    >
+                      {actionInProgress ? (
+                        <>
+                          <RefreshCw size={13} className="animate-spin" />
+                          <span>Atualizando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Key size={13} />
+                          <span>Salvar Nova Senha</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

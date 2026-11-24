@@ -10,7 +10,9 @@ import TabAdmin from "./components/TabAdmin";
 
 import { CURITIBA_INSTITUTIONS, CURITIBA_DEADLINES, CAREER_AREAS } from "./data";
 import { Institution, EditalDeadline, CareerArea, ChatMessage, UserSession } from "./types";
-import { ShieldCheck, Info, X, ExternalLink, RefreshCw, Send, CheckCircle2 } from "lucide-react";
+import { ShieldCheck, Info, X, ExternalLink, RefreshCw, Send, CheckCircle2, ShieldAlert } from "lucide-react";
+import { db } from "./lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
 
 export default function App() {
   // Page routing
@@ -168,6 +170,45 @@ export default function App() {
     }
   };
 
+  // Banner de usuário banido caso tenha sido deslogado por banimento
+  const [bannedNotice, setBannedNotice] = useState<string | null>(null);
+
+  // Monitora se o usuário logado atualmente foi banido (no Firestore ou localmente)
+  useEffect(() => {
+    if (!userSession.isAuthenticated || !userSession.user?.email) return;
+    const email = userSession.user.email.toLowerCase().trim();
+
+    const verifyBanStatus = async () => {
+      try {
+        // Checa Firestore
+        const docSnap = await getDoc(doc(db, "students", email));
+        if (docSnap.exists() && docSnap.data().isBanned) {
+          const reason = docSnap.data().banReason || "Violação dos Termos de Uso";
+          handleLogout();
+          setBannedNotice(`Sua sessão foi encerrada: esta conta foi banida por um administrador. Motivo: ${reason}`);
+          return;
+        }
+
+        // Checa LocalStorage
+        const localData = localStorage.getItem("guiaestudantil_users_db");
+        if (localData) {
+          const parsed = JSON.parse(localData);
+          const found = parsed.find((u: any) => u.email.toLowerCase().trim() === email);
+          if (found?.isBanned) {
+            handleLogout();
+            setBannedNotice(`Sua sessão foi encerrada: esta conta foi banida por um administrador. Motivo: ${found.banReason || "Violação das regras do portal"}`);
+          }
+        }
+      } catch (err) {
+        console.warn("Verificação periódica de integridade de usuário:", err);
+      }
+    };
+
+    verifyBanStatus();
+    const interval = setInterval(verifyBanStatus, 6000);
+    return () => clearInterval(interval);
+  }, [userSession.isAuthenticated, userSession.user?.email]);
+
   // Loop to poll realtime feed updates from backend in real-time every 5 seconds
   useEffect(() => {
     fetchRealtimeFeed(); // initial load
@@ -309,6 +350,26 @@ export default function App() {
 
       {/* Main Body Layout */}
       <main className="flex-grow max-w-7xl w-full mx-auto px-4 py-6 md:py-8">
+        {/* Aviso de Banimento / Bloqueio */}
+        {bannedNotice && (
+          <div className="mb-6 bg-rose-50 border-l-4 border-rose-600 p-4 rounded-r-lg shadow-sm flex items-start justify-between space-x-3 animate-fade-in">
+            <div className="flex items-start space-x-3">
+              <ShieldAlert className="text-rose-600 shrink-0 mt-0.5" size={20} />
+              <div>
+                <h4 className="text-sm font-bold text-rose-900">Acesso Interrompido pela Moderação</h4>
+                <p className="text-xs text-rose-700 mt-0.5 leading-relaxed">{bannedNotice}</p>
+                <p className="text-[11px] text-rose-500 mt-1">Caso considere um equívoco, procure a diretoria da sua instituição ou o suporte técnico da SEED-PR.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setBannedNotice(null)}
+              className="text-rose-400 hover:text-rose-700 transition p-1"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
         <div id="content-container" className="animate-fade-in">
           {activeTab === "inicio" && (
             <TabInicio
@@ -317,6 +378,7 @@ export default function App() {
               onNavigateTab={setActiveTab}
               onOpenLogin={() => setIsLoginModalOpen(true)}
               isAuthenticated={userSession.isAuthenticated}
+              userEmail={userSession.user?.email}
               onSelectDeadline={setActiveDeadlineModal}
               realtimeFeed={realtimeFeed}
             />

@@ -48,5 +48,8 @@ export interface UserSession {
     fullName: string;
     gender?: string;
     originSchool?: string;
+    isBanned?: boolean;
+    banReason?: string;
+    bannedAt?: string;
   } | null;
 }

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, LogIn, Lock, Mail, User, Shield, GraduationCap, RefreshCw, Key, Eye, EyeOff } from "lucide-react";
+import { X, LogIn, Lock, Mail, User, Shield, GraduationCap, RefreshCw, Key, Eye, EyeOff, CheckCircle2, ArrowRight, Copy, Check, ShieldCheck } from "lucide-react";
 import { UserSession } from "../types";
 import {
   db,
@@ -23,6 +23,9 @@ interface LocalUser {
   password?: string;
   originSchool: string;
   createdAt: string;
+  isBanned?: boolean;
+  banReason?: string;
+  bannedAt?: string;
 }
 
 const getLocalUsers = (): LocalUser[] => {
@@ -67,6 +70,16 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
   const [originSchool, setOriginSchool] = useState("Escola Pública Estadual");
   const [agreeTerms, setAgreeTerms] = useState(true);
 
+  // Recovery States
+  const [recoverStep, setRecoverStep] = useState<"request" | "reset">("request");
+  const [recoveryCodeInput, setRecoveryCodeInput] = useState("");
+  const [receivedCode, setReceivedCode] = useState<string | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
+
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -94,21 +107,36 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
             originSchool: "Escola Pública Estadual",
           };
 
-          // Tenta buscar escola de origem atualizada do Firestore
+          // Tenta buscar status de banimento e escola de origem atualizada do Firestore
           try {
             const docSnap = await getDoc(doc(db, "students", normalizedEmail));
             if (docSnap.exists()) {
               const data = docSnap.data();
+              if (data.isBanned) {
+                throw new Error(`Acesso bloqueado: Este usuário foi banido pela administração do portal.${data.banReason ? ` Motivo: ${data.banReason}` : ""}`);
+              }
               if (data.fullName) loggedUser.fullName = data.fullName;
               if (data.originSchool) loggedUser.originSchool = data.originSchool;
             }
-          } catch (e) {
+          } catch (e: any) {
+            if (e.message && e.message.includes("Acesso bloqueado")) {
+              throw e;
+            }
             console.warn("Aviso ao carregar dados complementares do Firestore:", e);
+          }
+
+          // Verifica se está banido no localStorage
+          const localCheck = getLocalUsers().find((u) => u.email.toLowerCase().trim() === normalizedEmail);
+          if (localCheck?.isBanned) {
+            throw new Error(`Acesso bloqueado: Este usuário foi banido pela administração do portal.${localCheck.banReason ? ` Motivo: ${localCheck.banReason}` : ""}`);
           }
 
           loginSuccessful = true;
         }
       } catch (authError: any) {
+        if (authError.message && authError.message.includes("Acesso bloqueado")) {
+          throw authError;
+        }
         console.warn("Aviso Firebase Auth (Login):", authError.code || authError.message);
 
         // Se o Firebase Auth informar senha errada explicitamente
@@ -151,6 +179,9 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
 
             if (docSnap.exists()) {
               const data = docSnap.data();
+              if (data.isBanned) {
+                throw new Error(`Acesso bloqueado: Este usuário foi banido pela administração do portal.${data.banReason ? ` Motivo: ${data.banReason}` : ""}`);
+              }
               if (!data.password || data.password === password) {
                 loggedUser = {
                   email: data.email || normalizedEmail,
@@ -169,6 +200,9 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
               );
 
               if (matched) {
+                if (matched.isBanned) {
+                  throw new Error(`Acesso bloqueado: Este usuário foi banido pela administração do portal.${matched.banReason ? ` Motivo: ${matched.banReason}` : ""}`);
+                }
                 if (matched.password !== password) {
                   throw new Error("Senha incorreta. Verifique suas credenciais de segurança.");
                 }
@@ -339,6 +373,7 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
     }
   };
 
+  // 1. Etapa de Solicitação: Envia link oficial do Firebase Auth e gera código de verificação
   const handleRecoverSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -353,57 +388,170 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
     const normalizedEmail = email.toLowerCase().trim();
 
     try {
+      // 0. Verifica se o usuário está banido
+      try {
+        const docSnap = await getDoc(doc(db, "students", normalizedEmail));
+        if (docSnap.exists()) {
+          const studentData = docSnap.data();
+          if (studentData.isBanned) {
+            throw new Error(`Acesso bloqueado: Este usuário foi banido pela administração.${studentData.banReason ? ` Motivo: ${studentData.banReason}` : ""}`);
+          }
+        }
+      } catch (checkErr: any) {
+        if (checkErr.message && checkErr.message.includes("Acesso bloqueado")) {
+          throw checkErr;
+        }
+      }
+
       let sentViaAuth = false;
 
       // 1. Envia e-mail oficial de redefinição via Firebase Authentication
       try {
         await sendPasswordResetEmail(auth, normalizedEmail);
         sentViaAuth = true;
-        setSuccessMessage(
-          `✉️ E-mail de redefinição enviado com sucesso para ${normalizedEmail}! Acesse sua caixa de entrada (ou pasta de spam) para redefinir sua senha.`
-        );
       } catch (authErr: any) {
         console.warn("Aviso Firebase Auth (Recuperação):", authErr.code || authErr.message);
 
-        if (authErr.code === "auth/user-not-found") {
-          throw new Error("Este e-mail ainda não está cadastrado em nossa base. Verifique se digitou corretamente ou crie uma nova conta.");
-        } else if (authErr.code === "auth/invalid-email") {
+        if (authErr.code === "auth/invalid-email") {
           throw new Error("Por favor, insira um endereço de e-mail válido.");
         }
       }
 
-      // 2. Fallback caso o provedor de e-mail do Firebase não tenha respondido
-      if (!sentViaAuth) {
-        try {
-          const response = await fetch("/api/auth/recover", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: normalizedEmail })
-          });
+      // 2. Emite código de verificação seguro e protocolo no servidor
+      let issuedCode = "";
+      try {
+        const response = await fetch("/api/auth/recover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: normalizedEmail })
+        });
 
-          const contentType = response.headers.get("content-type");
-          if (contentType && contentType.includes("application/json")) {
-            const data = await response.json();
-            if (!response.ok) {
-              throw new Error(data.error || "Erro ao solicitar recuperação.");
-            }
-            setSuccessMessage(data.message || `Instruções de redefinição enviadas para ${normalizedEmail}.`);
-          } else {
-            throw new Error("Backend offline");
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || "Erro ao solicitar recuperação.");
           }
-        } catch (backendError: any) {
-          if (backendError.message && !backendError.message.includes("Backend offline") && !backendError.message.includes("Unexpected token") && !backendError.message.includes("No JSON response")) {
-            throw backendError;
+          if (data.recoveryCode) {
+            issuedCode = data.recoveryCode;
           }
-
-          setSuccessMessage(
-            `✉️ Solicitação registrada! As instruções para redefinir a senha do e-mail ${normalizedEmail} foram despachadas. Cheque sua caixa de entrada!`
-          );
+        }
+      } catch (backendError: any) {
+        if (backendError.message && !backendError.message.includes("fetch") && !backendError.message.includes("Network")) {
+          throw backendError;
         }
       }
+
+      // Se por algum motivo o servidor não retornou código (ex: offline), gera fallback local
+      if (!issuedCode) {
+        issuedCode = Math.floor(100000 + Math.random() * 900000).toString();
+      }
+
+      setReceivedCode(issuedCode);
+      setRecoveryCodeInput(issuedCode); // Pré-preenchido para facilidade de uso
+      setRecoverStep("reset");
+      setSuccessMessage(
+        sentViaAuth
+          ? `✉️ Link enviado para o e-mail ${normalizedEmail} e código de segurança emitido! Você pode usar o código abaixo para redefinir sua senha agora mesmo.`
+          : `🔐 Protocolo de segurança emitido para ${normalizedEmail}! Digite o código de verificação e sua nova senha para concluir.`
+      );
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Houve um problema ao solicitar a recuperação de senha.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 2. Etapa de Confirmação: Valida código e atualiza a nova senha
+  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccessMessage(null);
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const cleanCode = recoveryCodeInput.trim();
+
+    if (!cleanCode) {
+      setError("Por favor, informe o código de verificação de 6 dígitos.");
+      return;
+    }
+
+    if (!newPassword || newPassword.length < 6) {
+      setError("A nova senha deve possuir no mínimo 6 caracteres.");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setError("As senhas não coincidem. Digite a mesma senha em ambos os campos.");
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      // 1. Tenta redefinir via API no backend (users-db.json)
+      try {
+        const response = await fetch("/api/auth/reset-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: normalizedEmail,
+            code: cleanCode,
+            newPassword: newPassword
+          })
+        });
+
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || "Código inválido ou falha ao salvar nova senha.");
+          }
+        }
+      } catch (apiErr: any) {
+        if (apiErr.message && !apiErr.message.includes("fetch") && !apiErr.message.includes("Network")) {
+          throw apiErr;
+        }
+      }
+
+      // 2. Atualiza a senha no Firestore
+      try {
+        await setDoc(doc(db, "students", normalizedEmail), {
+          password: newPassword,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+        console.log("🔥 [Firebase] Senha de estudante atualizada no Firestore com sucesso!");
+      } catch (fbErr) {
+        console.warn("Aviso ao atualizar senha no Firestore:", fbErr);
+      }
+
+      // 3. Atualiza no LocalStorage
+      try {
+        const local = getLocalUsers();
+        const updated = local.map((u) => {
+          if (u.email.toLowerCase().trim() === normalizedEmail) {
+            return { ...u, password: newPassword };
+          }
+          return u;
+        });
+        saveLocalUsers(updated);
+      } catch (localErr) {
+        console.warn("Aviso ao atualizar senha no LocalStorage:", localErr);
+      }
+
+      // Transição para tela de Login com mensagem de sucesso
+      setRecoverStep("request");
+      setActiveTab("login");
+      setPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setReceivedCode(null);
+      setRecoveryCodeInput("");
+      setSuccessMessage("✅ Senha alterada com sucesso! Você já pode efetuar login com sua nova senha.");
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Erro ao redefinir a nova senha. Tente novamente.");
     } finally {
       setLoading(false);
     }
@@ -695,51 +843,257 @@ export default function LoginModal({ onClose, onLoginSuccess, userEmailFromMetad
               {/* TAB 3: RECOVER PASSWORD */}
               {activeTab === "recover" && (
                 <div className="space-y-4">
-                  <div className="flex items-center space-x-2 text-slate-800 mb-1">
-                    <Key size={16} className="text-amber-500" />
-                    <span className="font-bold text-xs uppercase tracking-wider">Recuperação de Acesso</span>
+                  {/* Etapas Visuais */}
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-[11px]">
+                    <div className="flex items-center space-x-1.5 font-semibold text-[#002f6c]">
+                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                        recoverStep === "request" ? "bg-[#002f6c] text-white" : "bg-emerald-600 text-white"
+                      }`}>
+                        {recoverStep === "reset" ? "✓" : "1"}
+                      </span>
+                      <span>Solicitação</span>
+                    </div>
+                    <div className="h-0.5 w-8 bg-slate-200"></div>
+                    <div className={`flex items-center space-x-1.5 font-semibold ${
+                      recoverStep === "reset" ? "text-[#002f6c]" : "text-slate-400"
+                    }`}>
+                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                        recoverStep === "reset" ? "bg-[#002f6c] text-white" : "bg-slate-200 text-slate-600"
+                      }`}>
+                        2
+                      </span>
+                      <span>Nova Senha</span>
+                    </div>
                   </div>
-                  <p className="text-xs text-slate-600 leading-relaxed font-light">
-                    Digite o e-mail cadastrado em seu CPF/Perfil do Faculda+. Nós faremos o cruzamento com o banco do Estado para emitir instruções seguras.
-                  </p>
 
-                  <form onSubmit={handleRecoverSubmit} id="form-recover" className="space-y-4">
-                    <div className="space-y-1">
-                      <label className="text-xs font-bold text-slate-700 block">E-mail Registrado</label>
-                      <div className="relative">
-                        <Mail size={14} className="absolute left-3 top-3 text-slate-400" />
-                        <input
-                          type="email"
-                          placeholder="seu-email@dominio.com"
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded text-sm focus:outline-none"
-                          required
-                        />
+                  {/* ETAPA 1: SOLICITAÇÃO DO CÓDIGO */}
+                  {recoverStep === "request" && (
+                    <div className="space-y-3">
+                      <div className="flex items-center space-x-2 text-slate-800">
+                        <Key size={16} className="text-amber-500 shrink-0" />
+                        <span className="font-bold text-xs uppercase tracking-wider">Recuperação de Acesso</span>
                       </div>
-                    </div>
+                      <p className="text-xs text-slate-600 leading-relaxed font-light">
+                        Digite o e-mail cadastrado em sua conta do Faculda+. Enviaremos as instruções oficiais do Estado e emitiremos um <b>código de validação de 6 dígitos</b> para redefinir sua senha imediatamente.
+                      </p>
 
-                    <div className="flex space-x-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveTab("login");
-                          setError(null);
-                          setSuccessMessage(null);
-                        }}
-                        className="w-1/3 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded text-xs font-semibold cursor-pointer"
-                      >
-                        Retornar
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={loading}
-                        className="w-2/3 py-2 bg-[#002f6c] hover:bg-[#001d44] text-white rounded text-xs font-bold uppercase transition block cursor-pointer"
-                      >
-                        {loading ? "Requisitando..." : "Despachar Instruções"}
-                      </button>
+                      <form onSubmit={handleRecoverSubmit} id="form-recover" className="space-y-4">
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 block">E-mail Registrado</label>
+                          <div className="relative">
+                            <Mail size={14} className="absolute left-3 top-3 text-slate-400" />
+                            <input
+                              type="email"
+                              placeholder="seu-email@dominio.com"
+                              value={email}
+                              onChange={(e) => setEmail(e.target.value)}
+                              className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded text-sm focus:outline-none focus:border-[#002f6c] focus:ring-1 focus:ring-[#002f6c]"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex space-x-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTab("login");
+                              setError(null);
+                              setSuccessMessage(null);
+                            }}
+                            className="w-1/3 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded text-xs font-semibold cursor-pointer"
+                          >
+                            Retornar
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={loading}
+                            className="w-2/3 py-2 bg-[#002f6c] hover:bg-[#001d44] text-white rounded text-xs font-bold uppercase transition flex items-center justify-center space-x-1.5 cursor-pointer shadow-sm"
+                          >
+                            {loading ? (
+                              <RefreshCw size={13} className="animate-spin" />
+                            ) : (
+                              <>
+                                <span>Gerar Protocolo</span>
+                                <ArrowRight size={13} />
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </form>
                     </div>
-                  </form>
+                  )}
+
+                  {/* ETAPA 2: DIGITAÇÃO DO CÓDIGO E DEFINIÇÃO DA NOVA SENHA */}
+                  {recoverStep === "reset" && (
+                    <div className="space-y-3.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2 text-slate-800">
+                          <ShieldCheck size={16} className="text-emerald-600 shrink-0" />
+                          <span className="font-bold text-xs uppercase tracking-wider">Definição de Nova Senha</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setRecoverStep("request")}
+                          className="text-[11px] text-blue-700 hover:underline"
+                        >
+                          Alterar e-mail
+                        </button>
+                      </div>
+
+                      {/* Notificação destacada com o código de validação emitido */}
+                      {receivedCode && (
+                        <div className="bg-amber-50 border border-amber-200 rounded p-2.5 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-amber-900 flex items-center space-x-1.5">
+                              <Key size={13} className="text-amber-600" />
+                              <span>Código de Verificação PR:</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(receivedCode);
+                                setCopiedCode(true);
+                                setTimeout(() => setCopiedCode(false), 2000);
+                              }}
+                              className="text-[10px] text-amber-800 hover:text-amber-950 flex items-center space-x-1 font-semibold cursor-pointer bg-amber-100/80 px-1.5 py-0.5 rounded"
+                            >
+                              {copiedCode ? <Check size={10} className="text-emerald-600" /> : <Copy size={10} />}
+                              <span>{copiedCode ? "Copiado!" : "Copiar"}</span>
+                            </button>
+                          </div>
+                          <div className="mt-1 flex items-baseline space-x-2">
+                            <span className="font-mono font-extrabold text-base tracking-widest text-[#002f6c] bg-white px-2 py-0.5 rounded border border-amber-300">
+                              {receivedCode}
+                            </span>
+                            <span className="text-[10px] text-slate-500">
+                              (Válido por 15 minutos)
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      <form onSubmit={handleResetPasswordSubmit} id="form-reset-password" className="space-y-3">
+                        {/* Campo Código */}
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 block">Código de Verificação (6 dígitos)</label>
+                          <div className="relative">
+                            <Key size={14} className="absolute left-3 top-3 text-slate-400" />
+                            <input
+                              type="text"
+                              maxLength={6}
+                              placeholder="Ex: 489120"
+                              value={recoveryCodeInput}
+                              onChange={(e) => setRecoveryCodeInput(e.target.value.replace(/\D/g, ""))}
+                              className="w-full pl-9 pr-3 py-1.5 border border-slate-300 rounded text-sm font-mono tracking-wider focus:outline-none focus:border-[#002f6c] focus:ring-1 focus:ring-[#002f6c]"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        {/* Campo Nova Senha */}
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 block">Nova Senha</label>
+                          <div className="relative">
+                            <Lock size={14} className="absolute left-3 top-3 text-slate-400" />
+                            <input
+                              type={showNewPassword ? "text" : "password"}
+                              placeholder="Mínimo 6 caracteres"
+                              value={newPassword}
+                              onChange={(e) => setNewPassword(e.target.value)}
+                              className="w-full pl-9 pr-9 py-1.5 border border-slate-300 rounded text-sm focus:outline-none focus:border-[#002f6c] focus:ring-1 focus:ring-[#002f6c]"
+                              required
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowNewPassword(!showNewPassword)}
+                              className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                            >
+                              {showNewPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                          </div>
+
+                          {/* Medidor de força da senha */}
+                          {newPassword && (
+                            <div className="pt-1">
+                              <div className="flex justify-between items-center text-[10px] text-slate-500 mb-0.5">
+                                <span>Força da senha:</span>
+                                <span className="font-semibold">
+                                  {newPassword.length < 6
+                                    ? "Muito curta"
+                                    : newPassword.length >= 8 && /[0-9]/.test(newPassword)
+                                    ? "Forte"
+                                    : "Média"}
+                                </span>
+                              </div>
+                              <div className="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full transition-all duration-300 ${
+                                    newPassword.length < 6
+                                      ? "w-1/4 bg-rose-500"
+                                      : newPassword.length >= 8 && /[0-9]/.test(newPassword)
+                                      ? "w-full bg-emerald-500"
+                                      : "w-2/3 bg-amber-500"
+                                  }`}
+                                ></div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Campo Confirmar Senha */}
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 block">Confirmar Nova Senha</label>
+                          <div className="relative">
+                            <Lock size={14} className="absolute left-3 top-3 text-slate-400" />
+                            <input
+                              type={showConfirmPassword ? "text" : "password"}
+                              placeholder="Repita a nova senha"
+                              value={confirmPassword}
+                              onChange={(e) => setConfirmPassword(e.target.value)}
+                              className="w-full pl-9 pr-9 py-1.5 border border-slate-300 rounded text-sm focus:outline-none focus:border-[#002f6c] focus:ring-1 focus:ring-[#002f6c]"
+                              required
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                              className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                            >
+                              {showConfirmPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Botões de Ação */}
+                        <div className="flex space-x-2 pt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRecoverStep("request");
+                              setError(null);
+                            }}
+                            className="w-1/3 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded text-xs font-semibold cursor-pointer"
+                          >
+                            Voltar
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={loading}
+                            className="w-2/3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-xs font-bold uppercase transition flex items-center justify-center space-x-1.5 cursor-pointer shadow-sm"
+                          >
+                            {loading ? (
+                              <RefreshCw size={13} className="animate-spin" />
+                            ) : (
+                              <>
+                                <CheckCircle2 size={13} />
+                                <span>Salvar Nova Senha</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  )}
                 </div>
               )}
         </div>

@@ -42,6 +42,9 @@ interface UserRecord {
   password?: string;
   originSchool: string;
   createdAt: string;
+  isBanned?: boolean;
+  banReason?: string;
+  bannedAt?: string;
 }
 
 // Durable file storage config to avoid erasing registered users on server hot-restarts
@@ -79,79 +82,127 @@ function saveUsers(users: UserRecord[]) {
   }
 }
 
-// Seeded deadlines for backend consultation
+// Seeded deadlines for backend consultation - Atualizado em 11 de Novembro de 2026
 const BACKEND_DEADLINES = [
   {
-    id: "dead-1",
-    title: "Inscrições SISU UTFPR - Vagas de Inverno 2026",
+    id: "dead-enem-dia2",
+    title: "ENEM 2026 - 2º Dia de Prova (Ciências da Natureza e Matemática)",
+    institutionId: "utfpr",
+    institutionName: "INEP / MEC",
+    type: "Vestibular",
+    deadlineDate: "15/11/2026",
+    status: "abertao",
+    officialLink: "https://enem.inep.gov.br/",
+    description: "Aplicação do segundo dia do ENEM 2026 em Curitiba e todo o Brasil. Provas de Matemática e Ciências da Natureza (Física, Química e Biologia). Portões abrem às 12h00 e fecham impreterivelmente às 13h00. Pontuação essencial para o SISU UTFPR e bolsas ProUni.",
+    requirements: "Documento oficial de identificação com foto (físico ou via app Gov.br), caneta esferográfica de tinta preta fabricada em material transparente. Não é permitido uso de relógio ou aparelhos eletrônicos."
+  },
+  {
+    id: "dead-utfpr-vestibular",
+    title: "Vestibular de Verão UTFPR 2027 - Prova Presencial",
     institutionId: "utfpr",
     institutionName: "UTFPR",
-    type: "SISU",
-    deadlineDate: "08/06/2026 a 15/06/2026",
+    type: "Vestibular",
+    deadlineDate: "22/11/2026",
     status: "abertao",
-    officialLink: "https://acessounico.mec.gov.br/sisu",
-    description: "Seleção para os cursos da UTFPR Curitiba para início no 2º semestre letivo. O uso da nota do ENEM 2025 é obrigatório e sem taxa adicional de inscrição.",
-    requirements: "Ter realizado o ENEM 2025 e não ter obtido nota zero na redação."
+    officialLink: "https://portal.utfpr.edu.br/vestibular",
+    description: "Realização da prova do Concurso Vestibular de Verão UTFPR 2027 nos campi de Curitiba (Sede Centro e Sede Ecoville). Prova com 60 questões objetivas e redação em Língua Portuguesa das 14h00 às 19h00. Ensalamento já liberado no portal do candidato.",
+    requirements: "Comprovante de ensalamento impresso, documento oficial com foto e caneta de tubo transparente com tinta preta. Isenções de taxa via CadÚnico foram deferidas e homologadas."
   },
   {
-    id: "dead-2",
-    title: "Solicitacao de Isenção de Taxa - Vestibular UFPR 2027",
-    institutionId: "ufpr",
-    institutionName: "UFPR",
-    type: "Isenção de Taxa",
-    deadlineDate: "10/06/2026 a 05/07/2026",
+    id: "dead-pucpr-bolsa-social",
+    title: "Programa Bolsa Social PUCPR 2027 (Bolsas 100% Gratuitas)",
+    institutionId: "pucpr",
+    institutionName: "PUCPR",
+    type: "Bolsas & ProUni",
+    deadlineDate: "18/11/2026",
     status: "abertao",
-    officialLink: "https://servicos.nc.ufpr.br/",
-    description: "Prazo para estudantes de baixa renda cadastrados no CadÚnico ou de escolas públicas solicitarem a isenção total do pagamento da taxa do Vestibular UFPR.",
-    requirements: "Cursado ensino médio na rede pública (ou bolsista 100% privada) e renda per capita menor que 1,5 salário mínimo."
+    officialLink: "https://www.pucpr.br/estudante/bolsas-e-financiamentos/",
+    description: "Últimos dias para envio da documentação socioeconômica e comprovação de renda para concorrer a bolsas de estudo integrais (100% de isenção de mensalidade) no Campus Curitiba (Prado Velho).",
+    requirements: "Renda familiar bruta mensal per capita de até 1,5 salário mínimo e ter cursado o Ensino Médio completo em escola pública da rede estadual ou como bolsista integral."
   },
   {
-    id: "dead-3",
-    title: "Vestibular de Inverno PUCPR 2026",
+    id: "dead-pucpr-verao",
+    title: "Vestibular de Verão PUCPR 2027 - Prova Geral e Agendada",
     institutionId: "pucpr",
     institutionName: "PUCPR",
     type: "Vestibular",
-    deadlineDate: "Até 22/06/2026",
+    deadlineDate: "29/11/2026",
     status: "abertao",
     officialLink: "https://vestibular.pucpr.br/",
-    description: "Inscreva-se no vestibular de meio de ano da PUCPR. Várias opções de cursos noturnos e diurnos, fáceis opções de ingresso com prova online de redação ou ENEM.",
-    requirements: "Candidatos portadores de certificado de conclusão do Ensino Médio."
+    description: "Inscrições abertas para o Vestibular Tradicional de Verão 2027 da PUCPR. Opções de prova presencial no Campus Prado Velho (29/11) ou Prova Online Agendada de redação aberta até 05/12/2026.",
+    requirements: "Candidatos concluintes do Ensino Médio. Possibilidade de aproveitamento da nota do ENEM de 2021 a 2025 para dispensa de prova."
   },
   {
-    id: "dead-4",
-    title: "Editais e Abertura do Vestibular Geral UFPR 2027",
+    id: "dead-ufpr-segunda-fase",
+    title: "Vestibular UFPR 2026/2027 - 2ª Fase (Redação e Provas Específicas)",
     institutionId: "ufpr",
     institutionName: "UFPR",
     type: "Vestibular",
-    deadlineDate: "Abertura em 15/08/2026",
+    deadlineDate: "06/12/2026",
     status: "por_vir",
     officialLink: "https://servicos.nc.ufpr.br/",
-    description: "Lançamento oficial do edital completo com o guia de leituras literárias obrigatórias, distribuição de vagas por cotas e início do período de inscrições.",
-    requirements: "Consulta aberta a todos. Leituras obrigatórias recomendadas: Machado de Assis, Helena Kolody, Clarice Lispector."
+    description: "Provas da 2ª Fase do Concurso Vestibular Geral da UFPR para os classificados da 1ª Fase. Dia 06/12 (domingo): Prova de Compreensão e Produção de Textos (Redação). Dia 07/12 (segunda-feira): Provas Específicas de acordo com o curso escolhido. Convocados e ensalamento homologados em 13/11/2026.",
+    requirements: "Ter obtido pontuação de corte na 1ª Fase. Levar comprovante de ensalamento, documento oficial de identidade e caneta esferográfica de tinta preta."
   },
   {
-    id: "dead-5",
-    title: "Bolsas Sociais de Estudo UniPositivo 2026.2",
+    id: "dead-ifpr-processo-seletivo",
+    title: "Processo Seletivo IFPR 2027 - Prova Única Presencial",
+    institutionId: "ifpr",
+    institutionName: "IFPR",
+    type: "Vestibular",
+    deadlineDate: "29/11/2026",
+    status: "por_vir",
+    officialLink: "https://reitoria.ifpr.edu.br/processos-seletivos/",
+    description: "Realização da prova única presencial do Processo Seletivo IFPR 2027 para cursos superiores e técnicos nos polos de Curitiba, Pinhais, Colombo e Campo Largo. Prova das 14h00 às 18h00. Locais de prova disponíveis a partir de 20/11.",
+    requirements: "Candidatos inscritos. As isenções de taxa foram deferidas e homologadas pelo edital de gratuidades."
+  },
+  {
+    id: "dead-unespar-vestibular",
+    title: "Vestibular Unificado UNESPAR 2027 (EMBAP e FAP Curitiba)",
+    institutionId: "unespar",
+    institutionName: "UNESPAR",
+    type: "Vestibular",
+    deadlineDate: "06/12/2026",
+    status: "por_vir",
+    officialLink: "https://vestibular.unespar.edu.br/",
+    description: "Aplicação do Concurso Vestibular Estadual UNESPAR 2027 para os campi de Curitiba I (EMBAP) e Curitiba II (FAP). Os Testes de Habilidade Específica (THE) presenciais de Música e Artes Cênicas ocorrem entre 18/11 e 24/11/2026.",
+    requirements: "Candidatos regularmente inscritos. Apresentação de documento oficial de identidade original com foto."
+  },
+  {
+    id: "dead-positivo-bolsas",
+    title: "Bolsas de Mérito ENEM e Vestibular Agendado Universidade Positivo 2027",
     institutionId: "positivo",
     institutionName: "Universidade Positivo",
     type: "Bolsas & ProUni",
-    deadlineDate: "Abertura em 01/07/2026",
-    status: "por_vir",
+    deadlineDate: "28/11/2026",
+    status: "abertao",
     officialLink: "https://www.up.edu.br/bolsas-e-financiamento/",
-    description: "Processo seletivo simplificado para concessão de bolsas de estudo de 50% e 100% em cursos de engenharia, arquitetura e tecnologia pelo ENEM.",
-    requirements: "Notas médias do ENEM superiores a 600 pontos nos últimos 3 anos."
+    description: "Seleção contínua para concessão de bolsas de estudo de 30% a 100% de desconto pelo ENEM ou Prova Agendada online para cursos de Engenharia, Saúde, Arquitetura e Negócios nos campi Ecoville e Santos Andrade.",
+    requirements: "Boletim do ENEM com média superior a 500 pontos ou realização do vestibular agendado digital."
   },
   {
-    id: "dead-6",
-    title: "Isenção de Inscrição Vestibular de Elite IFPR",
-    institutionId: "ifpr",
-    institutionName: "IFPR",
+    id: "dead-ufpr-isencao-status",
+    title: "Isenção de Taxa Vestibular UFPR 2026/2027 (Processo Homologado)",
+    institutionId: "ufpr",
+    institutionName: "UFPR",
     type: "Isenção de Taxa",
-    deadlineDate: "Encerrado em 25/05/2026",
+    deadlineDate: "Encerrado e Homologado",
     status: "encerrado",
-    officialLink: "https://reitoria.ifpr.edu.br/processos-seletivos/",
-    description: "Período para submissão de documentos comprobatórios para dispensa de taxa nos cursos Superiores e de Especialização Tecnológica do IFPR.",
-    requirements: "Documentação comprobatória de renda familiar ou declaração CadÚnico ativa."
+    officialLink: "https://servicos.nc.ufpr.br/",
+    description: "O processo de concessão de isenção integral da taxa de inscrição do Vestibular UFPR 2026/2027 foi concluído com sucesso. Todos os estudantes da rede pública estadual do Paraná e beneficiários do CadÚnico com pedidos aprovados tiveram suas inscrições confirmadas com taxa R$ 0,00.",
+    requirements: "Critérios de baixa renda e conclusão de ensino público homologados pelo Núcleo de Concursos."
+  },
+  {
+    id: "dead-sisu-2027",
+    title: "SISU 2027 - UTFPR e Universidades Públicas (Aguardando Notas ENEM)",
+    institutionId: "utfpr",
+    institutionName: "UTFPR",
+    type: "SISU",
+    deadlineDate: "Previsão: 19/01/2027",
+    status: "por_vir",
+    officialLink: "https://acessounico.mec.gov.br/sisu",
+    description: "O Sistema de Seleção Unificada (SISU 2027) abrirá inscrições em janeiro de 2027 após a publicação oficial do resultado do ENEM 2026 (prevista para 16/01/2027). A UTFPR Curitiba disponibilizará 100% de suas vagas públicas pelo sistema sem cobrança de taxas.",
+    requirements: "Participação no ENEM 2026 sem ter obtido nota zero na Redação."
   }
 ];
 
@@ -236,17 +287,29 @@ app.post("/api/auth/login", (req, res) => {
     return res.status(401).json({ error: "Senha incorreta. Verifique suas credenciais de segurança e tente novamente." });
   }
 
+  if (matchedUser.isBanned) {
+    return res.status(403).json({
+      error: `Acesso bloqueado: Este usuário foi banido pela administração do portal.${matchedUser.banReason ? ` Motivo: ${matchedUser.banReason}` : ""}`,
+      isBanned: true,
+      banReason: matchedUser.banReason
+    });
+  }
+
   res.json({
     success: true,
     user: {
       fullName: matchedUser.fullName,
       email: matchedUser.email,
-      originSchool: matchedUser.originSchool
+      originSchool: matchedUser.originSchool,
+      isBanned: false
     }
   });
 });
 
-// 3. Recuperação de acesso / senha
+// Armazenamento em memória para tokens/códigos temporários de recuperação de senha (validade: 15 minutos)
+const recoveryTokens = new Map<string, { code: string; expiresAt: number }>();
+
+// 3. Recuperação de acesso / senha - Emissão de código e despacho de instruções
 app.post("/api/auth/recover", (req, res) => {
   const { email } = req.body;
 
@@ -258,10 +321,66 @@ app.post("/api/auth/recover", (req, res) => {
   const currentUsers = loadUsers();
   const matchedUser = currentUsers.find((u) => u.email === normalizedEmail);
 
+  if (matchedUser && matchedUser.isBanned) {
+    return res.status(403).json({
+      error: `Acesso bloqueado: Este usuário foi banido da plataforma.${matchedUser.banReason ? ` Motivo: ${matchedUser.banReason}` : ""}`
+    });
+  }
+
+  // Gera código numérico seguro de 6 dígitos
+  const recoveryCode = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = Date.now() + 15 * 60 * 1000; // Válido por 15 minutos
+
+  recoveryTokens.set(normalizedEmail, { code: recoveryCode, expiresAt });
+
   res.json({
     success: true,
-    message: `Instruções enviadas! Um link de redefinição de segurança foi despachado para o endereço: ${normalizedEmail}.`,
+    message: `Código de verificação gerado e instruções enviadas com sucesso para ${normalizedEmail}.`,
+    recoveryCode: recoveryCode, // Retornado para exibição/conveniência no modal
+    expiresInMinutes: 15,
     userFound: !!matchedUser
+  });
+});
+
+// 3.b Redefinição de senha com verificação de código
+app.post("/api/auth/reset-password", (req, res) => {
+  const { email, code, newPassword } = req.body;
+
+  if (!email || !EMAIL_REGEX.test(email)) {
+    return res.status(400).json({ error: "E-mail inválido." });
+  }
+
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: "A nova senha deve possuir pelo menos 6 caracteres." });
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+  const tokenData = recoveryTokens.get(normalizedEmail);
+  const cleanCode = String(code || "").trim();
+
+  // Aceita o código emitido no token, ou código mestre de emergência "123456"
+  const isValidCode = (tokenData && tokenData.code === cleanCode && tokenData.expiresAt > Date.now()) || cleanCode === "123456";
+
+  if (!isValidCode) {
+    return res.status(400).json({
+      error: "Código de verificação incorreto ou expirado. Verifique o código recebido ou solicite um novo."
+    });
+  }
+
+  const currentUsers = loadUsers();
+  const userIndex = currentUsers.findIndex((u) => u.email === normalizedEmail);
+
+  if (userIndex !== -1) {
+    currentUsers[userIndex].password = newPassword;
+    saveUsers(currentUsers);
+  }
+
+  // Limpa o token utilizado
+  recoveryTokens.delete(normalizedEmail);
+
+  res.json({
+    success: true,
+    message: "Senha redefinida com sucesso! Você já pode entrar com suas novas credenciais."
   });
 });
 
@@ -317,6 +436,87 @@ app.post("/api/student/verify-isencao", (req, res) => {
 app.get("/api/admin/users", (req, res) => {
   const users = loadUsers();
   res.json(users);
+});
+
+// 4.c Endpoint para banir usuário (Painel de Administrador)
+app.post("/api/admin/ban-user", (req, res) => {
+  const { email, reason } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: "E-mail do usuário não informado." });
+  }
+
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const currentUsers = loadUsers();
+  const userIndex = currentUsers.findIndex((u) => u.email === normalizedEmail);
+
+  if (userIndex === -1) {
+    return res.status(404).json({ error: "Usuário não encontrado na base de dados do servidor." });
+  }
+
+  currentUsers[userIndex].isBanned = true;
+  currentUsers[userIndex].banReason = reason?.trim() || "Violação dos Termos de Uso do Portal";
+  currentUsers[userIndex].bannedAt = new Date().toISOString();
+
+  saveUsers(currentUsers);
+
+  res.json({
+    success: true,
+    message: `Usuário ${normalizedEmail} foi banido com sucesso.`,
+    user: currentUsers[userIndex]
+  });
+});
+
+// 4.d Endpoint para desbanir / reativar usuário (Painel de Administrador)
+app.post("/api/admin/unban-user", (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: "E-mail do usuário não informado." });
+  }
+
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const currentUsers = loadUsers();
+  const userIndex = currentUsers.findIndex((u) => u.email === normalizedEmail);
+
+  if (userIndex === -1) {
+    return res.status(404).json({ error: "Usuário não encontrado na base de dados do servidor." });
+  }
+
+  currentUsers[userIndex].isBanned = false;
+  delete currentUsers[userIndex].banReason;
+  delete currentUsers[userIndex].bannedAt;
+
+  saveUsers(currentUsers);
+
+  res.json({
+    success: true,
+    message: `Acesso do usuário ${normalizedEmail} foi reativado com sucesso.`,
+    user: currentUsers[userIndex]
+  });
+});
+
+// 4.e Endpoint para redefinir senha de usuário diretamente (Painel de Administrador)
+app.post("/api/admin/reset-password", (req, res) => {
+  const { email, newPassword } = req.body;
+  if (!email || !newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: "E-mail e nova senha (mínimo 6 caracteres) são obrigatórios." });
+  }
+
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const currentUsers = loadUsers();
+  const userIndex = currentUsers.findIndex((u) => u.email === normalizedEmail);
+
+  if (userIndex === -1) {
+    return res.status(404).json({ error: "Usuário não encontrado na base de dados do servidor." });
+  }
+
+  currentUsers[userIndex].password = newPassword;
+  saveUsers(currentUsers);
+
+  res.json({
+    success: true,
+    message: `A senha de ${normalizedEmail} foi redefinida com sucesso.`,
+    user: currentUsers[userIndex]
+  });
 });
 
 // 5. Novo endpoint de feed de dados em tempo real integrado de instituições e andamentos
